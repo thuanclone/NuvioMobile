@@ -793,6 +793,16 @@ struct TabContentView: View {
     let usesTabletFloatingTabBar: Bool
     @ObservedObject var coordinator: TabNavigationCoordinator
     @ObservedObject var appCoordinator: AppNavigationCoordinator
+    @ObservedObject private var systemUI = SystemUI.shared
+
+    private var showsTabBar: Bool {
+        // Hide while the in-app player is immersive — SwiftUI toolbar alone
+        // is not reliable on iOS 26 liquid-glass tab bars.
+        !systemUI.isPlayerImmersive
+            && usesNativeTabBar
+            && appCoordinator.isMainContentVisible
+            && coordinator.path.isEmpty
+    }
 
     var body: some View {
         NavigationStack(
@@ -831,10 +841,9 @@ struct TabContentView: View {
         // Tab-bar visibility is a preference emitted by the active navigation
         // stack. Applying it here keeps the authentication/profile gate truly
         // full-screen on iOS 26, where a modifier on TabView itself is ignored.
+        // Also hide while the video player is immersive.
         .toolbar(
-            usesNativeTabBar && appCoordinator.isMainContentVisible && coordinator.path.isEmpty
-                ? Visibility.visible
-                : Visibility.hidden,
+            showsTabBar ? Visibility.visible : Visibility.hidden,
             for: .tabBar
         )
     }
