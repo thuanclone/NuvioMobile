@@ -1,11 +1,9 @@
 # Place this file at: .github/workflows/build.yaml
-# Then: Actions → Build Test IPA → Run workflow → choose Release
+# Actions → Build Test IPA → Run workflow → Release
 #
-# Requires a macOS runner with Xcode 26 (macos-26). Free GitHub public
-# repos have limited macOS minutes; private repos need a paid plan.
-#
-# Optional secret (same as upstream):
-#   NUVIO_LOCAL_PROPERTIES_BASE64 — base64 of local.properties if needed
+# IMPORTANT: Do NOT use submodules: recursive on checkout.
+# MPVKit is initialized by ./scripts/prepare-ios-dependencies.sh only.
+# libass-android has no url in .gitmodules and breaks recursive checkout.
 
 name: Build Test IPA
 
@@ -45,8 +43,7 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+        # No submodules here — MPVKit is pulled in prepare-ios-dependencies.sh
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -67,7 +64,6 @@ jobs:
 
       - name: Verify Apple toolchain
         run: |
-          # Fallback if Xcode_26.6 path is missing on the runner image
           if [[ ! -d "${DEVELOPER_DIR}" ]]; then
             latest="$(ls -d /Applications/Xcode*.app/Contents/Developer 2>/dev/null | sort -V | tail -n 1 || true)"
             if [[ -n "${latest}" ]]; then
