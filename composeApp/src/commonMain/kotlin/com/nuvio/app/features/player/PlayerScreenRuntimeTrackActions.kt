@@ -127,20 +127,32 @@ internal fun PlayerScreenRuntime.restorePersistedTrackPreferenceIfNeeded(): Bool
                 val fetchKey = addonSubtitleFetchKey.takeUnless {
                     activeSourceUrl.startsWith("file:") && externalSubtitles.isNotEmpty()
                 }
+                // Wait until the first auto-fetch for this title has been kicked off
+                // and either finished or already produced a matchable row.
                 if (fetchKey != null && autoFetchedAddonSubtitlesForKey != fetchKey) return false
 
                 val subtitle = findPersistedAddonSubtitle(addonSubtitles, preference)
+                val persistedUrl = preference.addonSubtitleUrl?.takeIf { it.isNotBlank() }
                 val canRestoreWhileLoading = subtitle != null && (
-                    subtitle.url == preference.addonSubtitleUrl ||
+                    subtitle.url == persistedUrl ||
                         preference.addonSubtitleAddonName.isNullOrBlank() ||
                         subtitle.addonName.equals(preference.addonSubtitleAddonName, ignoreCase = true)
                     )
-                if (isLoadingAddonSubtitles && !canRestoreWhileLoading) return false
-                if (subtitle != null) {
-                    selectedAddonSubtitleId = subtitle.selectionKey
+                // Prefer waiting for the addon list when we only have language/name
+                // and no concrete URL to re-apply yet.
+                if (isLoadingAddonSubtitles && !canRestoreWhileLoading && persistedUrl == null) {
+                    return false
+                }
+
+                // Prefer a live match from the current addon list; otherwise fall
+                // back to the persisted URL so re-entry still shows the chosen sub
+                // (OpenSubtitles rows often change id between fetches).
+                val urlToApply = subtitle?.url ?: persistedUrl
+                if (!urlToApply.isNullOrBlank()) {
+                    selectedAddonSubtitleId = subtitle?.selectionKey ?: urlToApply
                     selectedSubtitleIndex = -1
                     useCustomSubtitles = true
-                    playerController?.setSubtitleUri(subtitle.url)
+                    playerController?.setSubtitleUri(urlToApply)
                     preferredSubtitleSelectionApplied = true
                     isUserExplicitSubtitleSelection = true
                 }

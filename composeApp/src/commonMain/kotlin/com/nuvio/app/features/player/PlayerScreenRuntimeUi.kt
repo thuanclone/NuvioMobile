@@ -300,12 +300,16 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, 
             onResizeModeClick = { cycleResizeMode() },
             onSpeedClick = { cyclePlaybackSpeed() },
             onSubtitleClick = {
-                refreshTracks()
                 showSubtitleModal = true
+                scope.launch {
+                    refreshTracks()
+                }
             },
             onAudioClick = {
-                refreshTracks()
                 showAudioModal = true
+                scope.launch {
+                    refreshTracks()
+                }
             },
             onVideoSettingsClick = if (isIos) {
                 {
