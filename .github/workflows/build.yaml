@@ -1,9 +1,7 @@
-# Place this file at: .github/workflows/build.yaml
+# .github/workflows/build.yaml
 # Actions → Build Test IPA → Run workflow → Release
 #
-# IMPORTANT: Do NOT use submodules: recursive on checkout.
-# MPVKit is initialized by ./scripts/prepare-ios-dependencies.sh only.
-# libass-android has no url in .gitmodules and breaks recursive checkout.
+# Do NOT use submodules: recursive (breaks on libass-android).
 
 name: Build Test IPA
 
@@ -30,7 +28,7 @@ jobs:
   build:
     name: Build unsigned full ${{ inputs.configuration }} IPA
     runs-on: macos-26
-    timeout-minutes: ${{ inputs.configuration == 'Release' && 75 || 30 }}
+    timeout-minutes: ${{ inputs.configuration == 'Release' && 90 || 40 }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
@@ -43,7 +41,6 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
-        # No submodules here — MPVKit is pulled in prepare-ios-dependencies.sh
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -73,6 +70,7 @@ jobs:
           fi
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          java -version
 
       - name: Configure runtime properties
         if: env.RELEASE_PROPERTIES_BASE64 != ''
@@ -83,8 +81,60 @@ jobs:
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
 
-      - name: Build unsigned full ${{ inputs.configuration }} IPA
+      - name: Preflight Kotlin iOS framework link
+        id: kotlin_link
         run: |
+          set -euo pipefail
+          mkdir -p build/logs
+          export ORG_GRADLE_PROJECT_org.gradle.jvmargs="${NUVIO_GRADLE_JVMARGS}"
+          export ORG_GRADLE_PROJECT_kotlin.native.jvmArgs="${NUVIO_KOTLIN_NATIVE_JVMARGS}"
+          if [[ "${IOS_CONFIGURATION}" == "Release" ]]; then
+            task=":composeApp:linkReleaseFrameworkIosArm64"
+          else
+            task=":composeApp:linkDebugFrameworkIosArm64"
+          fi
+          echo "Running ${task}"
+          set +e
+          ./gradlew "${task}" --no-daemon --stacktrace 2>&1 | tee build/logs/kotlin-link.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [[ "${status}" -ne 0 ]]; then
+            {
+              echo ""
+              echo "============================================================"
+              echo " KOTLIN LINK FAILED — error summary (scroll here)"
+              echo "============================================================"
+              echo ""
+              # Prefer Kotlin compiler errors
+              grep -E '^e: |^error: |FAILED|What went wrong:|Execution failed|OutOfMemory|Unresolved|Compilation error' \
+                build/logs/kotlin-link.log | tail -n 80 || true
+              echo ""
+              echo "------------------------------------------------------------"
+              echo " Last 60 lines of kotlin-link.log:"
+              echo "------------------------------------------------------------"
+              tail -n 60 build/logs/kotlin-link.log || true
+              echo ""
+              echo "============================================================"
+              echo " END ERROR SUMMARY — paste this block if asking for help"
+              echo "============================================================"
+            } | tee -a build/logs/kotlin-link-summary.txt
+            # Also put summary into GitHub step summary (visible on job page)
+            {
+              echo "## Kotlin link failed"
+              echo ""
+              echo '```'
+              cat build/logs/kotlin-link-summary.txt
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit "${status}"
+          fi
+          echo "Kotlin framework link OK"
+
+      - name: Build unsigned full ${{ inputs.configuration }} IPA
+        id: ipa_build
+        run: |
+          set -euo pipefail
+          mkdir -p build/logs
           (
             while sleep 60; do
               echo "::group::Build resources $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -95,8 +145,39 @@ jobs:
             done
           ) &
           monitor_pid=$!
-          trap 'kill "${monitor_pid}" 2>/dev/null || true' EXIT
-          ./scripts/build-ios-ipa.sh
+          set +e
+          ./scripts/build-ios-ipa.sh 2>&1 | tee build/logs/xcode-ipa.log
+          status=${PIPESTATUS[0]}
+          set -e
+          kill "${monitor_pid}" 2>/dev/null || true
+          if [[ "${status}" -ne 0 ]]; then
+            {
+              echo ""
+              echo "============================================================"
+              echo " XCODE / IPA BUILD FAILED — error summary (scroll here)"
+              echo "============================================================"
+              echo ""
+              grep -E 'error:|FAILED|BUILD FAILED|What went wrong:|Execution failed|Compile Kotlin|fatal error|OutOfMemory|undefined symbol' \
+                build/logs/xcode-ipa.log | tail -n 100 || true
+              echo ""
+              echo "------------------------------------------------------------"
+              echo " Last 80 lines of xcode-ipa.log:"
+              echo "------------------------------------------------------------"
+              tail -n 80 build/logs/xcode-ipa.log || true
+              echo ""
+              echo "============================================================"
+              echo " END ERROR SUMMARY — paste this block if asking for help"
+              echo "============================================================"
+            } | tee -a build/logs/xcode-ipa-summary.txt
+            {
+              echo "## IPA build failed"
+              echo ""
+              echo '```'
+              cat build/logs/xcode-ipa-summary.txt
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit "${status}"
+          fi
 
       - name: Summarize IPA
         run: |
@@ -125,3 +206,12 @@ jobs:
           path: build/ios-ipa/*.ipa
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs-${{ github.sha }}
+          path: build/logs/**
+          if-no-files-found: ignore
+          retention-days: 3
