@@ -73,10 +73,18 @@ jobs:
           java -version
 
       - name: Configure runtime properties
-        if: env.RELEASE_PROPERTIES_BASE64 != ''
         run: |
-          printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
-          sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+          set -euo pipefail
+          # generateRuntimeConfigs declares local.properties as @InputFile.
+          # Missing file fails the task — always ensure it exists.
+          if [[ -n "${RELEASE_PROPERTIES_BASE64}" ]]; then
+            printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
+            sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+          else
+            echo "No NUVIO_LOCAL_PROPERTIES_BASE64 secret — using empty local.properties"
+            : > local.properties
+          fi
+          echo "local.properties size: $(wc -c < local.properties) bytes"
 
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
@@ -108,13 +116,29 @@ jobs:
               echo " KOTLIN LINK FAILED — error summary (scroll here)"
               echo "============================================================"
               echo ""
-              grep -E '^e: |^error: |FAILED|What went wrong:|Execution failed|OutOfMemory|Unresolved|Compilation error' \
-                build/logs/kotlin-link.log | tail -n 80 || true
+              # Capture the real cause lines Gradle prints above the stack trace
+              grep -nE '^e: |^error: |FAILED|What went wrong:|Execution failed|OutOfMemory|Unresolved|Compilation error|A problem|Cannot |Could not |Exception|Caused by:' \
+                build/logs/kotlin-link.log | tail -n 120 || true
               echo ""
               echo "------------------------------------------------------------"
-              echo " Last 60 lines of kotlin-link.log:"
+              echo " Context around first 'FAILED' / 'What went wrong':"
               echo "------------------------------------------------------------"
-              tail -n 60 build/logs/kotlin-link.log || true
+              # Print ~40 lines around the first real failure marker
+              awk '
+                /What went wrong:|Execution failed for task|BUILD FAILED|e: / {
+                  if (!seen++) start=NR-15
+                }
+                END {
+                  if (start<1) start=1
+                  for (i=start; i<=NR && i<start+50; i++) print lines[i]
+                }
+                { lines[NR]=$0 }
+              ' build/logs/kotlin-link.log || true
+              echo ""
+              echo "------------------------------------------------------------"
+              echo " Last 40 lines of kotlin-link.log:"
+              echo "------------------------------------------------------------"
+              tail -n 40 build/logs/kotlin-link.log || true
               echo ""
               echo "============================================================"
               echo " END ERROR SUMMARY — paste this block if asking for help"
@@ -158,8 +182,8 @@ jobs:
               echo " XCODE / IPA BUILD FAILED — error summary (scroll here)"
               echo "============================================================"
               echo ""
-              grep -E 'error:|FAILED|BUILD FAILED|What went wrong:|Execution failed|Compile Kotlin|fatal error|OutOfMemory|undefined symbol' \
-                build/logs/xcode-ipa.log | tail -n 100 || true
+              grep -nE 'error:|FAILED|BUILD FAILED|What went wrong:|Execution failed|Compile Kotlin|fatal error|OutOfMemory|undefined symbol|A problem' \
+                build/logs/xcode-ipa.log | tail -n 120 || true
               echo ""
               echo "------------------------------------------------------------"
               echo " Last 80 lines of xcode-ipa.log:"
