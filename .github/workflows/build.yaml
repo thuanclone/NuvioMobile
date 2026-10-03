@@ -86,8 +86,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/logs
-          export ORG_GRADLE_PROJECT_org.gradle.jvmargs="${NUVIO_GRADLE_JVMARGS}"
-          export ORG_GRADLE_PROJECT_kotlin.native.jvmArgs="${NUVIO_KOTLIN_NATIVE_JVMARGS}"
           if [[ "${IOS_CONFIGURATION}" == "Release" ]]; then
             task=":composeApp:linkReleaseFrameworkIosArm64"
           else
@@ -95,7 +93,12 @@ jobs:
           fi
           echo "Running ${task}"
           set +e
-          ./gradlew "${task}" --no-daemon --stacktrace 2>&1 | tee build/logs/kotlin-link.log
+          # Use env(1) — bash export cannot set names with dots
+          env \
+            "ORG_GRADLE_PROJECT_org.gradle.jvmargs=${NUVIO_GRADLE_JVMARGS}" \
+            "ORG_GRADLE_PROJECT_kotlin.native.jvmArgs=${NUVIO_KOTLIN_NATIVE_JVMARGS}" \
+            ./gradlew "${task}" --no-daemon --stacktrace \
+            2>&1 | tee build/logs/kotlin-link.log
           status=${PIPESTATUS[0]}
           set -e
           if [[ "${status}" -ne 0 ]]; then
@@ -105,7 +108,6 @@ jobs:
               echo " KOTLIN LINK FAILED — error summary (scroll here)"
               echo "============================================================"
               echo ""
-              # Prefer Kotlin compiler errors
               grep -E '^e: |^error: |FAILED|What went wrong:|Execution failed|OutOfMemory|Unresolved|Compilation error' \
                 build/logs/kotlin-link.log | tail -n 80 || true
               echo ""
@@ -117,8 +119,7 @@ jobs:
               echo "============================================================"
               echo " END ERROR SUMMARY — paste this block if asking for help"
               echo "============================================================"
-            } | tee -a build/logs/kotlin-link-summary.txt
-            # Also put summary into GitHub step summary (visible on job page)
+            } | tee build/logs/kotlin-link-summary.txt
             {
               echo "## Kotlin link failed"
               echo ""
@@ -168,7 +169,7 @@ jobs:
               echo "============================================================"
               echo " END ERROR SUMMARY — paste this block if asking for help"
               echo "============================================================"
-            } | tee -a build/logs/xcode-ipa-summary.txt
+            } | tee build/logs/xcode-ipa-summary.txt
             {
               echo "## IPA build failed"
               echo ""
