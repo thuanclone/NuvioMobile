@@ -1,5 +1,5 @@
 # .github/workflows/build.yaml
-# Actions → Build Test IPA → Run workflow → Release
+# Actions → Build Test IPA → Run workflow
 #
 # Do NOT use submodules: recursive (breaks on libass-android).
 
@@ -28,7 +28,8 @@ jobs:
   build:
     name: Build unsigned full ${{ inputs.configuration }} IPA
     runs-on: macos-26
-    timeout-minutes: ${{ inputs.configuration == 'Release' && 90 || 40 }}
+    # Release needs ~70–100 min on cold cache; Debug is faster.
+    timeout-minutes: ${{ inputs.configuration == 'Release' && 240 || 60 }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
@@ -75,8 +76,6 @@ jobs:
       - name: Configure runtime properties
         run: |
           set -euo pipefail
-          # generateRuntimeConfigs declares local.properties as @InputFile.
-          # Missing file fails the task — always ensure it exists.
           if [[ -n "${RELEASE_PROPERTIES_BASE64}" ]]; then
             printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
             sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
@@ -89,19 +88,17 @@ jobs:
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
 
+      # Debug only: surface Kotlin errors early without doubling Release compile time.
+      # Release skips this — xcodebuild already runs embedAndSignAppleFrameworkForXcode.
       - name: Preflight Kotlin iOS framework link
+        if: inputs.configuration == 'Debug'
         id: kotlin_link
         run: |
           set -euo pipefail
           mkdir -p build/logs
-          if [[ "${IOS_CONFIGURATION}" == "Release" ]]; then
-            task=":composeApp:linkReleaseFrameworkIosArm64"
-          else
-            task=":composeApp:linkDebugFrameworkIosArm64"
-          fi
+          task=":composeApp:linkDebugFrameworkIosArm64"
           echo "Running ${task}"
           set +e
-          # Use env(1) — bash export cannot set names with dots
           env \
             "ORG_GRADLE_PROJECT_org.gradle.jvmargs=${NUVIO_GRADLE_JVMARGS}" \
             "ORG_GRADLE_PROJECT_kotlin.native.jvmArgs=${NUVIO_KOTLIN_NATIVE_JVMARGS}" \
@@ -116,24 +113,8 @@ jobs:
               echo " KOTLIN LINK FAILED — error summary (scroll here)"
               echo "============================================================"
               echo ""
-              # Capture the real cause lines Gradle prints above the stack trace
               grep -nE '^e: |^error: |FAILED|What went wrong:|Execution failed|OutOfMemory|Unresolved|Compilation error|A problem|Cannot |Could not |Exception|Caused by:' \
                 build/logs/kotlin-link.log | tail -n 120 || true
-              echo ""
-              echo "------------------------------------------------------------"
-              echo " Context around first 'FAILED' / 'What went wrong':"
-              echo "------------------------------------------------------------"
-              # Print ~40 lines around the first real failure marker
-              awk '
-                /What went wrong:|Execution failed for task|BUILD FAILED|e: / {
-                  if (!seen++) start=NR-15
-                }
-                END {
-                  if (start<1) start=1
-                  for (i=start; i<=NR && i<start+50; i++) print lines[i]
-                }
-                { lines[NR]=$0 }
-              ' build/logs/kotlin-link.log || true
               echo ""
               echo "------------------------------------------------------------"
               echo " Last 40 lines of kotlin-link.log:"
@@ -161,11 +142,11 @@ jobs:
           set -euo pipefail
           mkdir -p build/logs
           (
-            while sleep 60; do
+            while sleep 90; do
               echo "::group::Build resources $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
               uptime
-              vm_stat
-              ps -Ao pid,etime,%cpu,rss,command -r | head -n 12 || true
+              vm_stat | head -n 12 || true
+              ps -Ao pid,etime,%cpu,rss,command -r | head -n 10 || true
               echo "::endgroup::"
             done
           ) &
