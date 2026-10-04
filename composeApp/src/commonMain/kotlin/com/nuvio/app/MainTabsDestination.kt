@@ -70,11 +70,13 @@ internal fun MainTabsDestination(
         val isTabletLayout = useTabletFloatingTabBar || maxWidth >= 768.dp
         val tabActions = remember(actions, isTabletLayout) { actions(isTabletLayout) }
         val useNativeBottomTabs = if (useNativeNavigation) {
+            // Native TabView already draws the system tab bar — never also draw
+            // Compose classic/floating bars or the user sees two menus.
             useNativeTabBar
         } else {
             liquidGlassNativeTabBarSupported && liquidGlassNativeTabBarEnabled && initialHomeReady
         }
-        // When iOS hosts the system/liquid-glass tab bar, never also draw Compose bars.
+        // Hard rule: if iOS is hosting tabs, Compose must not paint another bottom bar.
         val hideComposeBottomBars = useNativeBottomTabs || (useNativeNavigation && useNativeTabBar)
         val tabsRouteActive = rootRouteActive
         val navBarScrollState = rememberNuvioNavBarScrollState()
